@@ -20,6 +20,6 @@ struct CheckinResult {
 // POST /api/checkin
 CheckinResult checkin(const Settings &s, const String &currentHash);
 
-// GET /api/image. Streams the image and returns its hash from the X-Image-Hash header.
-// Later the received chunks go to the display driver (see TODO in api.cpp).
-bool downloadImage(const Settings &s, String &imageHash);
+// GET /api/image. Reads the complete image (IMAGE_SIZE_BYTES) into buffer and returns the
+// hash from the X-Image-Hash header.
+bool downloadImage(const Settings &s, uint8_t *buffer, size_t bufferSize, String &imageHash);

@@ -29,11 +29,15 @@ from sqlalchemy import select, text, update
 
 import config  # noqa: F401  (loads the .env)
 from db import devices, engine
+from wake_schedule import in_ota_window, load_entries, sleep_seconds
 
 IMAGE_DIR = Path(os.getenv("IMAGE_DIR", "images"))
 FIRMWARE_DIR = Path(os.getenv("FIRMWARE_DIR", "firmware"))
 DEACTIVATED_SLEEP_SECONDS = int(os.getenv("DEACTIVATED_SLEEP_SECONDS", "86400"))
 VERSION_RE = re.compile(r"[0-9A-Za-z][0-9A-Za-z._-]{0,19}")
+# Seconds a device stays awake after our answer (download + refresh). The sleep time is
+# shortened by this, so that the device wakes up close to the scheduled time.
+BUSY_SECONDS = {"image": 40, "ota": 90}
 
 # Interactive docs (/docs) are off by default; set API_DOCS=1 in .env for development.
 docs_enabled = os.getenv("API_DOCS", "0") == "1"
@@ -71,6 +75,11 @@ def require_active(dev) -> None:
 # --------------------------------------------------------------------------
 # Check-in
 # --------------------------------------------------------------------------
+def _now() -> datetime:
+    """Current local time (a separate function so tests can replace it)."""
+    return datetime.now()
+
+
 class Checkin(BaseModel):
     hash: str = Field("", max_length=64)       # hash of the image currently shown
     fw: str = Field("", max_length=20)         # running firmware version
@@ -81,7 +90,10 @@ class Checkin(BaseModel):
 def decide_action(dev, body: Checkin, now: datetime) -> str:
     """Firmware update first, then new image, otherwise nothing to do."""
     ota_wanted = bool(dev.desired_fw) and dev.desired_fw != body.fw
-    ota_allowed = dev.ota_force or dev.ota_after is None or now >= dev.ota_after
+    # Updates are installed at night (OTA_WINDOW), unless they are forced.
+    ota_allowed = dev.ota_force or (
+            (dev.ota_after is None or now >= dev.ota_after) and in_ota_window(now)
+    )
     if ota_wanted and ota_allowed:
         return "ota"
     if dev.desired_hash and dev.desired_hash != body.hash:
@@ -91,7 +103,7 @@ def decide_action(dev, body: Checkin, now: datetime) -> str:
 
 @app.post("/api/checkin")
 def checkin(body: Checkin, dev=Depends(current_device)):
-    now = datetime.now()
+    now = _now()
     values = {"last_seen": now, "reported_hash": body.hash or None}
     if body.fw:
         values["reported_fw"] = body.fw
@@ -100,10 +112,15 @@ def checkin(body: Checkin, dev=Depends(current_device)):
     if body.rssi is not None:
         values["rssi"] = body.rssi
 
+    sleep = DEACTIVATED_SLEEP_SECONDS
     if dev.mode != "active":
-        action, sleep = "deactivated", DEACTIVATED_SLEEP_SECONDS
+        action = "deactivated"
     else:
-        action, sleep = decide_action(dev, body, now), dev.sleep_seconds
+        action = decide_action(dev, body, now)
+        with engine.connect() as conn:
+            entries = load_entries(conn)
+        # Without schedule entries the fixed per-device sleep time is used.
+        sleep = sleep_seconds(now, entries, dev.id, BUSY_SECONDS.get(action, 0), dev.sleep_seconds)
         # The update is done once the device reports the desired version.
         if dev.desired_fw and body.fw == dev.desired_fw and (dev.ota_force or dev.ota_after):
             values["ota_force"] = False

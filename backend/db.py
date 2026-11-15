@@ -84,6 +84,17 @@ teachers = Table(
 )
 
 
+# Wake-up times of the displays: one row per weekday and time.
+# All devices use the schedule "default" (per-device schedules can be added later).
+wake_schedules = Table(
+    "wake_schedules", metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("name", String(40), nullable=False, default="default", index=True),
+    Column("weekday", Integer, nullable=False),  # 0 = Monday ... 6 = Sunday
+    Column("wake_time", Time, nullable=False),
+)
+
+
 def init_db() -> None:
     """Legt fehlende Tabellen an (vorhandene Tabellen bleiben unverändert)."""
     metadata.create_all(engine)

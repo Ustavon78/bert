@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Bert display firmware, version 0.1: check-in and hash logic only (no display output yet).
+// Bert display firmware.
 //
 // Flow after every wake-up:
-//   WiFi -> POST /api/checkin -> (image: GET /api/image, remember hash) -> deep sleep
+//   WiFi -> POST /api/checkin -> (image: GET /api/image, draw, remember hash) -> deep sleep
 
 #include <Arduino.h>
 #include <WiFi.h>
@@ -10,14 +10,19 @@
 
 #include "api.h"
 #include "config.h"
+#include "display.h"
 #include "settings.h"
+
+static void wifiOff() {
+  WiFi.disconnect(true);
+  WiFi.mode(WIFI_OFF);
+}
 
 [[noreturn]] static void sleepFor(uint32_t seconds) {
   seconds = constrain(seconds, (uint32_t)MIN_SLEEP_SECONDS, (uint32_t)MAX_SLEEP_SECONDS);
   Serial.printf("Sleeping for %u s\n", (unsigned)seconds);
   Serial.flush();
-  WiFi.disconnect(true);
-  WiFi.mode(WIFI_OFF);
+  wifiOff();
   esp_sleep_enable_timer_wakeup((uint64_t)seconds * 1000000ULL);
   esp_deep_sleep_start();
   while (true) {}  // never reached
@@ -50,6 +55,9 @@ void setup() {
     loadSettings(settings);
   }
 
+  // Reserve the image buffer before WiFi starts, while the heap is not fragmented yet.
+  uint8_t *imageBuffer = displayAllocBuffer();
+
   if (!connectWifi(settings)) {
     Serial.println(F("WiFi connection failed"));
     sleepFor(RETRY_SLEEP_SECONDS);
@@ -62,10 +70,17 @@ void setup() {
   switch (result.action) {
     case Action::Image: {
       Serial.printf("Action: image (desired %s)\n", result.hash.c_str());
+      if (!imageBuffer) {
+        Serial.println(F("Not enough memory for the image"));
+        break;
+      }
       String receivedHash;
-      if (downloadImage(settings, receivedHash)) {
+      if (downloadImage(settings, imageBuffer, IMAGE_SIZE_BYTES, receivedHash)) {
+        wifiOff();  // the radio is not needed while the panel refreshes
+        Serial.println(F("Drawing (takes about 20 seconds)..."));
+        displayShow(imageBuffer, imageBuffer + IMAGE_PLANE_BYTES);
         // Store the hash from the download header, not from the check-in answer: the server
-        // may have rendered a newer image in between. With a display this happens after drawing.
+        // may have rendered a newer image in between. Only after the panel is done.
         saveHash(receivedHash);
         Serial.printf("Hash stored: %s\n", receivedHash.c_str());
       } else {

@@ -60,7 +60,7 @@ CheckinResult checkin(const Settings &s, const String &currentHash) {
   return result;
 }
 
-bool downloadImage(const Settings &s, String &imageHash) {
+bool downloadImage(const Settings &s, uint8_t *buffer, size_t bufferSize, String &imageHash) {
   WiFiClient client;
   HTTPClient http;
   http.setTimeout(HTTP_TIMEOUT_MS);
@@ -76,21 +76,19 @@ bool downloadImage(const Settings &s, String &imageHash) {
     return false;
   }
   int length = http.getSize();
-  if (length != IMAGE_SIZE_BYTES) {
+  if (length != IMAGE_SIZE_BYTES || bufferSize < (size_t)length) {
     Serial.printf("image: unexpected size %d\n", length);
     http.end();
     return false;
   }
 
   WiFiClient *stream = http.getStreamPtr();
-  uint8_t buffer[512];
   size_t total = 0;
   unsigned long lastData = millis();
   while ((http.connected() || stream->available()) && total < (size_t)length) {
     size_t available = stream->available();
     if (available) {
-      size_t n = stream->readBytes(buffer, min(available, sizeof(buffer)));
-      // TODO: pass buffer[0..n) to the display driver (black plane first, then red plane).
+      size_t n = stream->readBytes(buffer + total, min(available, (size_t)length - total));
       total += n;
       lastData = millis();
     } else if (millis() - lastData > HTTP_TIMEOUT_MS) {

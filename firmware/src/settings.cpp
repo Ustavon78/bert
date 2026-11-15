@@ -4,6 +4,7 @@
 #include <Preferences.h>
 
 #include "config.h"
+#include "display.h"
 
 static Preferences prefs;
 // Always opened read/write: this creates the namespace on first use. A read-only open
@@ -53,6 +54,7 @@ static void printHelp() {
   Serial.println(F("  set token <value>    device token"));
   Serial.println(F("  reset-hash           forget the shown image (forces a new download)"));
   Serial.println(F("  factory-reset        delete all settings"));
+  Serial.println(F("  test                 draw a test pattern on the display"));
   Serial.println(F("  start                leave the console and continue"));
 }
 
@@ -76,6 +78,8 @@ static bool handleCommand(String line) {
     showSettings();
   } else if (line == "start") {
     return true;
+  } else if (line == "test") {
+    displayTestPattern();
   } else if (line == "reset-hash") {
     prefs.begin(NAMESPACE, false);
     prefs.remove("hash");

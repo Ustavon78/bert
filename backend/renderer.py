@@ -1,3 +1,12 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+"""Erzeugt für jedes aktive Display das Bild seines Raums.
+
+Ablauf (nach jedem Scraper-Lauf):
+    python scraper.py && python renderer.py
+Für jedes Display wird das Bild des Anzeigetags gezeichnet und ein Hash gebildet.
+Hat sich der Hash geändert, wird das Bild gespeichert und als desired_hash eingetragen.
+"""
+
 import hashlib
 import os
 import sys
