@@ -7,18 +7,17 @@ Alle Einstellungen stehen in der Datei .env (siehe .env.example).
 Die Tabellen werden einmalig mit  python init_db.py  angelegt.
 """
 
-import hashlib
-import json
 import os
 import re
 import sys
 from datetime import date, datetime, timedelta
 
-from sqlalchemy import delete, insert, select
+from sqlalchemy import delete, insert
 
 from config import json_env_list, require_env
 from db import days, engine, lessons, scrapes
 from lesson_status import is_cancelled  # eigenes Modul aus deinem Projekt
+from schooldays import scrape_days
 from vpmobil import ResourceNotFound, Unauthorized, VertretungsplanZugang
 from vpmobil.weekly import fetch_weekly_plans
 
@@ -34,8 +33,7 @@ SCHULNUMMER = require_env("SCHULNUMMER")
 BENUTZERNAME = require_env("BENUTZERNAME")
 PASSWORT = require_env("PASSWORT")
 ALL_ROOMS = json_env_list("ALL_ROOMS")
-DAYS_AHEAD = int(os.getenv("DAYS_AHEAD", "10"))  # Anzahl Schultage im Voraus
-KEEP_DAYS = 7                                    # so lange bleiben alte Tage in der DB
+KEEP_DAYS = 1                                    # so viele vergangene Tage bleiben in der DB
 
 
 # --------------------------------------------------------------------------
@@ -110,16 +108,6 @@ def build_rows(plan) -> list[dict]:
 # --------------------------------------------------------------------------
 # Pläne holen
 # --------------------------------------------------------------------------
-def school_days(count: int) -> list[date]:
-    """Die nächsten `count` Werktage ab heute."""
-    result, day = [], date.today()
-    while len(result) < count:
-        if day.weekday() < 5:
-            result.append(day)
-        day += timedelta(days=1)
-    return result
-
-
 def get_plan(access, day: date, weekly_cache: dict):
     """Vertretungsplan; gibt es keinen, der normale Wochenplan. -> (plan, quelle)"""
     try:
@@ -140,7 +128,7 @@ def get_plan(access, day: date, weekly_cache: dict):
 # In die DB schreiben
 # --------------------------------------------------------------------------
 def save_day(conn, day: date, plan, source: str) -> bool:
-    """Schreibt einen Tag. Gibt True zurück, wenn sich etwas geändert hat."""
+    """Ersetzt die Daten eines Tages komplett. Gibt True zurück, wenn gespeichert wurde."""
     rows = build_rows(plan)
     is_free = day in getattr(plan, "freieTage", ()) or bool(getattr(plan, "unterrichtsfrei", False))
 
@@ -149,20 +137,13 @@ def save_day(conn, day: date, plan, source: str) -> bool:
         log(f"{day}: Plan ist leer, alte Daten bleiben erhalten.")
         return False
 
-    new_hash = hashlib.sha256(
-        json.dumps([rows, is_free], sort_keys=True, ensure_ascii=False, default=str).encode()
-    ).hexdigest()
-    old_hash = conn.execute(select(days.c.content_hash).where(days.c.day == day)).scalar()
-    if old_hash == new_hash:
-        return False
-
     conn.execute(delete(lessons).where(lessons.c.day == day))
     conn.execute(delete(days).where(days.c.day == day))
     if rows:
         conn.execute(insert(lessons), [{**row, "day": day} for row in rows])
     conn.execute(insert(days).values(
-        day=day, content_hash=new_hash, plan_timestamp=getattr(plan, "zeitstempel", None),
-        source=source, is_free=is_free, updated_at=datetime.now(),
+        day=day, plan_timestamp=getattr(plan, "zeitstempel", None),
+        source=source, is_free=is_free, scraped_at=datetime.now(),
     ))
     return True
 
@@ -177,10 +158,10 @@ def main() -> int:
     started = datetime.now()
     access = VertretungsplanZugang(SCHULNUMMER, BENUTZERNAME, PASSWORT)
     weekly_cache: dict = {}
-    changed, errors, messages = 0, 0, []
+    saved, errors, messages = 0, 0, []
     denied = False
 
-    for day in school_days(DAYS_AHEAD):
+    for day in scrape_days():
         try:
             plan, source = get_plan(access, day, weekly_cache)
             if plan is None:
@@ -188,8 +169,8 @@ def main() -> int:
                 continue
             with engine.begin() as conn:  # eine Transaktion pro Tag
                 if save_day(conn, day, plan, source):
-                    changed += 1
-                    log(f"{day}: aktualisiert ({source}).")
+                    saved += 1
+                    log(f"{day}: gespeichert ({source}).")
         except Unauthorized:
             log("Zugriff verweigert, bitte Zugangsdaten in .env prüfen.")
             messages.append("Zugriff verweigert")
@@ -204,10 +185,10 @@ def main() -> int:
     with engine.begin() as conn:
         cleanup_old(conn)
         conn.execute(insert(scrapes).values(
-            started_at=started, status=status, days_changed=changed,
+            started_at=started, status=status, days_saved=saved,
             message="; ".join(messages)[:500] or None,
         ))
-    log(f"Fertig: Status {status}, {changed} Tag(e) geändert.")
+    log(f"Fertig: Status {status}, {saved} Tag(e) gespeichert.")
     return 0 if status == "ok" else 1
 
 

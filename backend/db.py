@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+"""Datenbankverbindung und Tabellen. Wird von Scraper, Renderer und API gemeinsam genutzt."""
+
 from sqlalchemy import (
     Boolean, Column, Date, DateTime, Integer, MetaData, String, Table, Time, create_engine,
 )
@@ -8,15 +11,14 @@ from config import require_env
 engine = create_engine(require_env("DATABASE_URL"), pool_pre_ping=True)
 metadata = MetaData()
 
-# Ein Eintrag pro Schultag: wann zuletzt geändert und woher der Plan kam.
+# Ein Eintrag pro Schultag: woher der Plan kam, ob frei ist und wann er geholt wurde.
 days = Table(
     "days", metadata,
     Column("day", Date, primary_key=True),
-    Column("content_hash", String(64), nullable=False),  # Hash des Tagesinhalts
     Column("plan_timestamp", DateTime, nullable=True),   # Planstand von vpmobil
     Column("source", String(20), nullable=False),        # "vertretung" | "normal"
     Column("is_free", Boolean, nullable=False, default=False),
-    Column("updated_at", DateTime, nullable=False),
+    Column("scraped_at", DateTime, nullable=False),      # letzter Abruf durch den Scraper  # wann der Scraper den Tag zuletzt geholt hat
 )
 
 # Eine Zeile pro Unterrichtsstunde und Raum.
@@ -46,8 +48,39 @@ scrapes = Table(
     Column("id", Integer, primary_key=True, autoincrement=True),
     Column("started_at", DateTime, nullable=False),
     Column("status", String(20), nullable=False),        # ok | partial | error
-    Column("days_changed", Integer, nullable=False, default=0),
+    Column("days_saved", Integer, nullable=False, default=0),
     Column("message", String(500)),
+)
+
+
+# Ein Eintrag pro Display.
+devices = Table(
+    "devices", metadata,
+    Column("id", String(12), primary_key=True),          # Geräte-ID (nicht geheim)
+    Column("name", String(80)),                          # z. B. "Raum 118, Tür"
+    Column("room", String(40), index=True),              # Raum, den das Display zeigt
+    Column("token_hash", String(64), nullable=False),    # SHA-256 des Geräte-Tokens
+    Column("mode", String(20), nullable=False, default="active"),  # active | deactivated
+    Column("desired_hash", String(64)),                  # Soll-Hash des Bildes (vom Renderer)
+    Column("reported_hash", String(64)),                 # Hash, den das Display zuletzt meldete
+    Column("desired_fw", String(20)),                    # Soll-Firmwareversion
+    Column("reported_fw", String(20)),                   # gemeldete Firmwareversion
+    Column("ota_after", DateTime),                       # Update erst ab diesem Zeitpunkt
+    Column("ota_force", Boolean, nullable=False, default=False),   # Update sofort
+    Column("sleep_seconds", Integer, nullable=False, default=14400),  # Schlafzeit bis zum nächsten Aufwachen
+    Column("last_seen", DateTime),
+    Column("batt_mv", Integer),
+    Column("rssi", Integer),
+    Column("created_at", DateTime, nullable=False),
+)
+
+
+# Ein Eintrag pro Display.
+# Lehrer: Kürzel (wie in vpmobil) -> Name, der auf dem Display erscheint.
+teachers = Table(
+    "teachers", metadata,
+    Column("abbreviation", String(20), primary_key=True),
+    Column("name", String(80), nullable=False),
 )
 
 
