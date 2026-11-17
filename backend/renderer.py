@@ -21,7 +21,7 @@ from PIL import Image, ImageDraw, ImageFont
 from sqlalchemy import select, update
 
 import config  # noqa: F401  (lädt die .env)
-from db import days, devices, engine, lessons, teachers
+from db import days, device_is_active, devices, engine, lessons, teachers
 from schooldays import display_day
 
 WIDTH, HEIGHT = 800, 480
@@ -209,7 +209,9 @@ def remove_old_images(device_id: str, new_hash: str) -> None:
 def main() -> int:
     day = display_day()
     with engine.connect() as conn:
-        active = conn.execute(select(devices).where(devices.c.mode == "active")).all()
+        # Filter in Python with the shared helper, so the renderer and the API always agree
+        # about which devices are active (an SQL comparison may ignore case, the API did not).
+        active = [d for d in conn.execute(select(devices)).all() if device_is_active(d.mode)]
         day_row = conn.execute(select(days).where(days.c.day == day)).first()
         rows = conn.execute(select(lessons).where(lessons.c.day == day)).all()
         names = {t.abbreviation.strip().casefold(): t.name

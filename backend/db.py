@@ -95,6 +95,18 @@ wake_schedules = Table(
 )
 
 
-def init_db() -> None:
-    """Legt fehlende Tabellen an (vorhandene Tabellen bleiben unverändert)."""
-    metadata.create_all(engine)
+# Device modes (devices.mode)
+MODE_ACTIVE = "active"            # normal operation
+MODE_DEACTIVATED = "deactivated"  # switched off by an admin: no images, no updates, rare check-ins
+DEVICE_MODES = (MODE_ACTIVE, MODE_DEACTIVATED)
+
+
+def normalize_mode(mode) -> str:
+    """Lower case without surrounding spaces, so that "Active " is still "active"."""
+    return (mode or "").strip().lower()
+
+
+def device_is_active(mode) -> bool:
+    """Only "active" counts as active. Everything else, including typos, is treated as
+    deactivated (fail closed). Use this function everywhere instead of comparing strings."""
+    return normalize_mode(mode) == MODE_ACTIVE

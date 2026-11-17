@@ -15,6 +15,8 @@ struct CheckinResult {
   uint32_t sleepSeconds = 0;
   String hash;                // desired image hash (action == Image)
   String fw;                  // desired firmware version (action == Ota)
+  String sha256;              // SHA-256 of that firmware (action == Ota)
+  uint32_t size = 0;          // size of that firmware in bytes (action == Ota)
 };
 
 // POST /api/checkin

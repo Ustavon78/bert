@@ -6,6 +6,7 @@
 #include <WiFi.h>
 
 #include "config.h"
+#include "ota.h"
 
 static void addAuthHeaders(HTTPClient &http, const Settings &s) {
   http.addHeader("X-Device-Id", s.id);
@@ -30,6 +31,9 @@ CheckinResult checkin(const Settings &s, const String &currentHash) {
   body["hash"] = currentHash;
   body["fw"] = FW_VERSION;
   body["rssi"] = WiFi.RSSI();  // no battery value yet (sensor differs per board)
+  body["board"] = BOARD_NAME;
+  String lastError = otaLastError();
+  if (lastError.length()) body["err"] = lastError;
   String payload;
   serializeJson(body, payload);
 
@@ -56,7 +60,10 @@ CheckinResult checkin(const Settings &s, const String &currentHash) {
   result.sleepSeconds = answer["sleep"] | 0;
   result.hash = answer["hash"] | "";
   result.fw = answer["fw"] | "";
+  result.sha256 = answer["sha256"] | "";
+  result.size = answer["size"] | 0;
   result.ok = true;
+  if (lastError.length()) otaClearError();  // the server has received it
   return result;
 }
 

@@ -2,7 +2,8 @@
 // Bert display firmware.
 //
 // Flow after every wake-up:
-//   WiFi -> POST /api/checkin -> (image: GET /api/image, draw, remember hash) -> deep sleep
+//   WiFi -> POST /api/checkin -> (update: install and restart)
+//                             -> (image: GET /api/image, draw, remember hash) -> deep sleep
 
 #include <Arduino.h>
 #include <WiFi.h>
@@ -11,6 +12,7 @@
 #include "api.h"
 #include "config.h"
 #include "display.h"
+#include "ota.h"
 #include "settings.h"
 
 static void wifiOff() {
@@ -40,10 +42,38 @@ static bool connectWifi(const Settings &s) {
   return true;
 }
 
+// Download the pending image and draw it.
+static void updateImage(const Settings &settings, uint8_t *imageBuffer) {
+  if (!imageBuffer) {
+    Serial.println(F("Not enough memory for the image"));
+    return;
+  }
+  String receivedHash;
+  if (!downloadImage(settings, imageBuffer, IMAGE_SIZE_BYTES, receivedHash)) {
+    Serial.println(F("Image download failed, will retry at next wake-up"));
+    return;
+  }
+  wifiOff();  // the radio is not needed while the panel refreshes
+  Serial.println(F("Drawing (takes about 20 seconds)..."));
+  displayShow(imageBuffer, imageBuffer + IMAGE_PLANE_BYTES);
+  // Store the hash from the download header, not from the check-in answer: the server
+  // may have rendered a newer image in between. Only after the panel is done.
+  saveHash(receivedHash);
+  Serial.printf("Hash stored: %s\n", receivedHash.c_str());
+}
+
 void setup() {
   Serial.begin(115200);
   delay(300);
-  Serial.printf("\nBert firmware %s\n", FW_VERSION);
+  Serial.printf("\nBert firmware %s (%s)\n", FW_VERSION, BOARD_NAME);
+
+  // Must come first: goes back to the previous firmware if a fresh update keeps crashing.
+  otaBootCheck();
+#ifdef OTA_TEST_CRASH
+  Serial.println(F("TEST BUILD: crashing on purpose"));
+  delay(200);
+  abort();
+#endif
 
   Settings settings;
   loadSettings(settings);
@@ -54,6 +84,8 @@ void setup() {
     runSerialSetup(!settingsComplete(settings));
     loadSettings(settings);
   }
+
+  watchdogStart();  // from here on a hanging firmware restarts itself
 
   // Reserve the image buffer before WiFi starts, while the heap is not fragmented yet.
   uint8_t *imageBuffer = displayAllocBuffer();
@@ -67,29 +99,22 @@ void setup() {
   CheckinResult result = checkin(settings, currentHash);
   if (!result.ok) sleepFor(RETRY_SLEEP_SECONDS);
 
+  // The server announces a pending image even next to an update.
+  bool imageWanted = result.hash.length() > 0 && result.hash != currentHash;
+
   switch (result.action) {
-    case Action::Image: {
-      Serial.printf("Action: image (desired %s)\n", result.hash.c_str());
-      if (!imageBuffer) {
-        Serial.println(F("Not enough memory for the image"));
-        break;
-      }
-      String receivedHash;
-      if (downloadImage(settings, imageBuffer, IMAGE_SIZE_BYTES, receivedHash)) {
-        wifiOff();  // the radio is not needed while the panel refreshes
-        Serial.println(F("Drawing (takes about 20 seconds)..."));
-        displayShow(imageBuffer, imageBuffer + IMAGE_PLANE_BYTES);
-        // Store the hash from the download header, not from the check-in answer: the server
-        // may have rendered a newer image in between. Only after the panel is done.
-        saveHash(receivedHash);
-        Serial.printf("Hash stored: %s\n", receivedHash.c_str());
-      } else {
-        Serial.println(F("Image download failed, will retry at next wake-up"));
-      }
-      break;
-    }
     case Action::Ota:
-      Serial.printf("Action: ota to %s (not implemented yet)\n", result.fw.c_str());
+      Serial.printf("Action: ota to %s\n", result.fw.c_str());
+      if (otaInstall(settings, result.fw, result.sha256, result.size)) {
+        delay(200);
+        ESP.restart();  // starts the new firmware, which checks in again
+      }
+      // Update skipped or failed: still refresh the display if needed.
+      if (imageWanted) updateImage(settings, imageBuffer);
+      break;
+    case Action::Image:
+      Serial.printf("Action: image (desired %s)\n", result.hash.c_str());
+      updateImage(settings, imageBuffer);
       break;
     case Action::Deactivated:
       Serial.println(F("Action: deactivated"));
@@ -99,6 +124,7 @@ void setup() {
       break;
   }
 
+  otaMarkGood();  // a freshly installed firmware is confirmed here
   sleepFor(result.sleepSeconds);
 }
 

@@ -11,9 +11,10 @@ from sqlalchemy import select
 import config  # noqa: F401  (loads the .env)
 from db import wake_schedules
 
-# A scheduled time closer than this is skipped. This avoids a second wake-up shortly after
-# a device woke up a bit early because of clock drift (the ESP32 RTC drifts by a few percent).
-MIN_GAP_SECONDS = 15 * 60
+# A scheduled time closer than this to the current check-in is skipped. This avoids a second
+# wake-up shortly after a device woke up a bit early because of clock drift (the ESP32 clock
+# drifts by a few percent). Must be smaller than the shortest interval in the schedule.
+MIN_GAP_SECONDS = int(os.getenv("MIN_WAKE_GAP_SECONDS", "900"))
 
 # Every device gets a fixed random offset (0..N seconds) so that all displays do not
 # connect in the same second.
