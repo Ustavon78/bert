@@ -69,6 +69,9 @@ devices = Table(
     Column("ota_force", Boolean, nullable=False, default=False),   # Update sofort
     Column("sleep_seconds", Integer, nullable=False, default=14400),  # Schlafzeit bis zum nächsten Aufwachen
     Column("last_seen", DateTime),
+    Column("board", String(30)),                         # board type reported by the firmware
+    Column("last_error", String(100)),                   # last error reported by the device
+    Column("last_error_at", DateTime),
     Column("batt_mv", Integer),
     Column("rssi", Integer),
     Column("created_at", DateTime, nullable=False),

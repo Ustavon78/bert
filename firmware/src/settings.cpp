@@ -24,11 +24,15 @@ void loadSettings(Settings &s) {
   s.server = getOrEmpty("server");
   s.id = getOrEmpty("id");
   s.token = getOrEmpty("token");
+  s.ca = getOrEmpty("ca");
   prefs.end();
 }
 
 bool settingsComplete(const Settings &s) {
-  return s.ssid.length() && s.server.length() && s.id.length() && s.token.length();
+  bool basics = s.ssid.length() && s.server.length() && s.id.length() && s.token.length();
+  // An https:// server can only be verified with its CA certificate.
+  bool needsCa = s.server.startsWith("https://") && s.ca.length() == 0;
+  return basics && !needsCa;
 }
 
 String loadHash() {
@@ -52,6 +56,7 @@ static void printHelp() {
   Serial.println(F("  set server <url>     e.g. http://192.168.1.10:8000"));
   Serial.println(F("  set id <value>       device id"));
   Serial.println(F("  set token <value>    device token"));
+  Serial.println(F("  set ca <base64>      CA certificate of the server (one line, needed for https://)"));
   Serial.println(F("  reset-hash           forget the shown image (forces a new download)"));
   Serial.println(F("  factory-reset        delete all settings"));
   Serial.println(F("  test                 draw a test pattern on the display"));
@@ -63,7 +68,9 @@ static void showSettings() {
   loadSettings(s);
   Serial.printf("ssid:   %s\n", s.ssid.c_str());
   Serial.printf("pass:   %s\n", s.pass.length() ? "(set)" : "(empty)");
-  Serial.printf("server: %s\n", s.server.c_str());
+  Serial.printf("server: %s%s\n", s.server.c_str(), s.server.startsWith("http://") ? "  (NOT encrypted!)" : "");
+  Serial.printf("ca:     %s", s.ca.length() ? "(set, " : "(empty)\n");
+  if (s.ca.length()) Serial.printf("%u characters)\n", (unsigned)s.ca.length());
   Serial.printf("id:     %s\n", s.id.c_str());
   Serial.printf("token:  %s\n", s.token.length() ? "(set)" : "(empty)");
   Serial.printf("hash:   %s\n", loadHash().c_str());
@@ -99,11 +106,23 @@ static bool handleCommand(String line) {
     }
     String key = rest.substring(0, space);
     String value = rest.substring(space + 1);
-    if (key != "ssid" && key != "pass" && key != "server" && key != "id" && key != "token") {
+    if (key != "ssid" && key != "pass" && key != "server" && key != "id" && key != "token" && key != "ca") {
       Serial.println(F("ERROR unknown key"));
       return false;
     }
     while (key == "server" && value.endsWith("/")) value.remove(value.length() - 1);
+    if (key == "ca") {
+      // Base64 only, and a plausible length for one certificate.
+      bool valid = value.length() >= 200 && value.length() <= 1400;
+      for (size_t i = 0; valid && i < value.length(); i++) {
+        char c = value[i];
+        valid = isalnum((unsigned char)c) || c == '+' || c == '/' || c == '=';
+      }
+      if (!valid) {
+        Serial.println(F("ERROR the CA must be one line of base64 (the content of ca.b64)"));
+        return false;
+      }
+    }
     prefs.begin(NAMESPACE, false);
     prefs.putString(key.c_str(), value);
     prefs.end();
@@ -137,7 +156,7 @@ void runSerialSetup(bool stayUntilComplete) {
             Serial.println(F("Settings incomplete, cannot start yet."));
           }
         }
-      } else if (line.length() < 200) {
+      } else if (line.length() < SERIAL_LINE_MAX) {
         line += c;
       }
     }

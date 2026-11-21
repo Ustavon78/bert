@@ -15,7 +15,7 @@ from datetime import datetime
 
 from sqlalchemy import select, update
 
-from app import FIRMWARE_DIR
+from firmware_files import FIRMWARE_DIR
 from db import DEVICE_MODES, device_is_active, devices, engine
 from wake_schedule import OTA_WINDOW
 

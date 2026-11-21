@@ -1,0 +1,168 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Management command for a Bert installation:  ./epaper help
+set -euo pipefail
+ROOT="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
+cd "$ROOT"
+
+compose() {
+  if docker compose version >/dev/null 2>&1; then docker compose "$@"; else docker-compose "$@"; fi
+}
+
+die() { echo "Error: $*" >&2; exit 1; }
+
+wait_healthy() {
+  echo -n "Waiting until the server answers"
+  for _ in $(seq 1 90); do
+    if curl -ksf "https://127.0.0.1/api/health" >/dev/null 2>&1; then echo " ok"; return 0; fi
+    echo -n "."
+    sleep 2
+  done
+  echo
+  die "The server does not answer. Look at the logs:  ./epaper logs"
+}
+
+env_value() {  # env_value NAME: value from the .env file
+  sed -n "s/^$1=//p" .env | tail -n 1 | sed "s/^'//; s/'\$//"
+}
+
+cmd_backup() {
+  mkdir -p backups
+  local file="backups/epaper-$(date +%Y-%m-%d_%H%M%S).sql.gz"
+  compose exec -T db sh -c 'MYSQL_PWD="$MARIADB_ROOT_PASSWORD" mariadb-dump --single-transaction --routines -u root epaper' | gzip > "$file.tmp"
+  mv "$file.tmp" "$file"
+  echo "Backup written: $file"
+}
+
+cmd_restore() {
+  local file="${1:-}"
+  [ -f "$file" ] || die "Usage: ./epaper restore backups/FILE.sql.gz"
+  read -r -p "The current database will be replaced by '$file'. Continue? [y/N]: " answer
+  [ "${answer:-N}" = "y" ] || die "Cancelled."
+  compose stop api worker web
+  compose exec -T db sh -c 'MYSQL_PWD="$MARIADB_ROOT_PASSWORD" mariadb -u root -e "DROP DATABASE epaper; CREATE DATABASE epaper CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci; GRANT ALL ON epaper.* TO \"epaper\"@\"%\";"'
+  gunzip -c "$file" | compose exec -T db sh -c 'MYSQL_PWD="$MARIADB_ROOT_PASSWORD" mariadb -u root epaper'
+  compose start api worker web
+  wait_healthy
+}
+
+cmd_update() {
+  cmd_backup
+  if [ -d .git ]; then
+    git pull --ff-only
+  else
+    echo "This folder is not a git checkout. Copy the new files over it first."
+  fi
+  compose build
+  compose up -d
+  wait_healthy
+  echo "Updated. The database migrations ran when the API started."
+}
+
+cmd_certs() {
+  [ "$#" -gt 0 ] || die "Usage: ./epaper certs --ip ADDRESS [--host NAME]   (add --new-ca to replace the CA)"
+  compose run --rm --no-deps -T --user "$(id -u):$(id -g)" -v "$PWD/certs:/certs-out" api \
+    python make_certs.py --out /certs-out "$@"
+  compose restart web
+}
+
+cmd_admin_password() {
+  local credentials password hash
+  credentials="$(compose run --rm --no-deps -T api python admin_passwd.py --generate)"
+  password="$(printf '%s\n' "$credentials" | sed -n 's/^ADMIN_PASSWORD=//p')"
+  hash="$(printf '%s\n' "$credentials" | sed -n "s/^ADMIN_PASSWORD_HASH='\(.*\)'\$/\1/p")"
+  [ -n "$password" ] && [ -n "$hash" ] || die "Could not create the password."
+  awk -v h="$hash" '/^ADMIN_PASSWORD_HASH=/{print "ADMIN_PASSWORD_HASH=\047" h "\047"; next} {print}' .env > .env.new
+  chmod 600 .env.new
+  mv .env.new .env
+  compose up -d --force-recreate api
+  echo "New admin password: $password"
+  echo "Write it down now. It is shown only once."
+}
+
+cmd_add_device() {
+  [ "$#" -ge 1 ] || die "Usage: ./epaper add-device ROOM [NAME]"
+  local output id token url
+  output="$(compose exec -T api python add_device.py "$@")"
+  id="$(printf '%s\n' "$output" | sed -n 's/^ID: *//p')"
+  token="$(printf '%s\n' "$output" | sed -n 's/^Token: *//p')"
+  [ -n "$id" ] && [ -n "$token" ] || die "Could not create the device: $output"
+  url="$(env_value PUBLIC_URL)"
+  echo "Device created. Type these lines into the serial console of the display"
+  echo "(open the serial monitor, press reset, and type within 3 seconds):"
+  echo
+  echo "  set ssid <WiFi name>"
+  echo "  set pass <WiFi password>"
+  echo "  set server $url"
+  [ -f certs/public/ca.b64 ] && echo "  set ca $(cat certs/public/ca.b64)"
+  echo "  set id $id"
+  echo "  set token $token"
+  echo "  start"
+  echo
+  echo "The token is shown only once."
+}
+
+cmd_teachers_import() {
+  local file="${1:-}"
+  [ -f "$file" ] || die "Usage: ./epaper teachers-import FILE.csv   (lines: abbreviation;name)"
+  compose cp "$file" api:/tmp/teachers.csv
+  compose exec -T api python import_teachers.py /tmp/teachers.csv
+}
+
+cmd_firmware_add() {
+  [ "$#" -eq 3 ] || die "Usage: ./epaper firmware-add FILE.bin BOARD VERSION   (e.g. firmware.bin waveshare_esp32 0.4.0)"
+  [ -f "$1" ] || die "File not found: $1"
+  compose cp "$1" "api:/data/firmware_bins/${2}_${3}.bin"
+  echo "Copied as ${2}_${3}.bin. Assign it to displays with:  ./epaper devices fw all $3"
+}
+
+cmd_help() {
+  cat <<'HELP'
+Bert management
+
+  ./epaper status                      state of the containers and the server
+  ./epaper logs [service]              follow the logs (api, worker, web, db, backup)
+  ./epaper start | stop | restart      start, stop or restart everything
+  ./epaper update                      backup, get the new version, rebuild, restart
+  ./epaper backup                      create a database backup now (folder backups/)
+  ./epaper restore FILE.sql.gz         replace the database with a backup
+
+  ./epaper add-device ROOM [NAME]      create a display, shows the console commands for it
+  ./epaper devices list                list displays
+  ./epaper devices mode ID|all active|deactivated
+  ./epaper devices fw ID|all VERSION [--force]    request a firmware update
+  ./epaper firmware-add FILE BOARD VERSION        make a firmware file available
+  ./epaper teachers-import FILE.csv    import teacher names (abbreviation;name)
+
+  ./epaper admin-password              create a new admin password
+  ./epaper certs --ip ADDRESS [--host NAME]       create the server certificate again
+  ./epaper shell                       shell inside the API container
+HELP
+}
+
+case "${1:-help}" in
+  status)
+    compose ps
+    echo
+    if curl -ksf "https://127.0.0.1/api/health" >/dev/null 2>&1; then echo "Server: answers"; else echo "Server: NOT answering"; fi
+    latest="$(ls -1t backups/epaper-*.sql.gz 2>/dev/null | head -n 1 || true)"
+    echo "Latest backup: ${latest:-none}"
+    df -h / | tail -n 1 | awk '{print "Disk: " $5 " used, " $4 " free"}'
+    ;;
+  logs)       shift; compose logs -f --tail=100 "$@" ;;
+  start)      compose up -d ;;
+  stop)       compose stop ;;
+  restart)    compose restart; wait_healthy ;;
+  update)     cmd_update ;;
+  backup)     cmd_backup ;;
+  restore)    shift; cmd_restore "$@" ;;
+  add-device) shift; cmd_add_device "$@" ;;
+  devices)    shift; compose exec -T api python devices_cli.py "$@" ;;
+  firmware-add) shift; cmd_firmware_add "$@" ;;
+  teachers-import) shift; cmd_teachers_import "$@" ;;
+  admin-password) cmd_admin_password ;;
+  certs)      shift; cmd_certs "$@" ;;
+  shell)      compose exec api sh ;;
+  help|-h|--help) cmd_help ;;
+  *) cmd_help; exit 1 ;;
+esac

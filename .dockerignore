@@ -1,0 +1,14 @@
+# Keep secrets and local files out of the image
+.env
+.env.db
+.git
+certs
+backups
+firmware
+test
+.idea
+.vscode
+backend/.venv
+**/__pycache__
+**/*.pyc
+**/*.db

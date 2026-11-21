@@ -22,7 +22,6 @@ import hashlib
 import hmac
 import logging
 import os
-import re
 from datetime import datetime
 from pathlib import Path
 
@@ -33,14 +32,13 @@ from sqlalchemy import select, text, update
 
 import config  # noqa: F401  (loads the .env)
 from db import DEVICE_MODES, device_is_active, devices, engine, normalize_mode
+from admin_api import router as admin_router
+from firmware_files import firmware_file, firmware_info
 from wake_schedule import in_ota_window, load_entries, sleep_seconds
 
 IMAGE_DIR = Path(os.getenv("IMAGE_DIR", "images"))
-FIRMWARE_DIR = Path(os.getenv("FIRMWARE_DIR", "firmware"))
 # A deactivated device still checks in now and then, so that it notices when it is activated again.
 DEACTIVATED_SLEEP_SECONDS = int(os.getenv("DEACTIVATED_SLEEP_SECONDS", "14400"))
-VERSION_RE = re.compile(r"[0-9A-Za-z][0-9A-Za-z._-]{0,19}")
-BOARD_RE = re.compile(r"[a-z0-9_]{1,30}")
 # Seconds a device stays awake after our answer (download + refresh). The sleep time is
 # shortened by this, so that the device wakes up close to the scheduled time.
 BUSY_SECONDS = {"image": 40, "ota": 90}
@@ -55,6 +53,19 @@ app = FastAPI(
     redoc_url=None,
     openapi_url="/openapi.json" if docs_enabled else None,
 )
+
+app.include_router(admin_router)
+
+# Only needed while the admin web page is developed on another address/port than the API.
+# In production nginx serves page and API from the same address, CORS stays off.
+cors_origins = [o.strip() for o in os.getenv("ADMIN_CORS_ORIGINS", "").split(",") if o.strip()]
+if cors_origins:
+    from fastapi.middleware.cors import CORSMiddleware
+    app.add_middleware(
+        CORSMiddleware, allow_origins=cors_origins, allow_credentials=True,
+        allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
+        allow_headers=["Authorization", "Content-Type", "X-Requested-With"],
+    )
 
 
 # --------------------------------------------------------------------------
@@ -80,32 +91,6 @@ def current_device(
 def require_active(dev) -> None:
     if not device_is_active(dev.mode):
         raise HTTPException(status_code=403, detail="Device deactivated")
-
-
-# --------------------------------------------------------------------------
-# Firmware files
-# --------------------------------------------------------------------------
-_firmware_cache: dict[Path, tuple[float, int, str]] = {}  # path -> (mtime, size, sha256)
-
-
-def firmware_file(board: str, version: str) -> Path | None:
-    """Path of <board>_<version>.bin, or None if the names are invalid or the file is missing."""
-    if not BOARD_RE.fullmatch(board) or not VERSION_RE.fullmatch(version):
-        return None
-    path = FIRMWARE_DIR / f"{board}_{version}.bin"
-    return path if path.is_file() else None
-
-
-def firmware_info(path: Path) -> tuple[int, str]:
-    """Size and SHA-256 of a firmware file (cached until the file changes)."""
-    mtime = path.stat().st_mtime
-    cached = _firmware_cache.get(path)
-    if cached and cached[0] == mtime:
-        return cached[1], cached[2]
-    data = path.read_bytes()
-    digest = hashlib.sha256(data).hexdigest()
-    _firmware_cache[path] = (mtime, len(data), digest)
-    return len(data), digest
 
 
 # --------------------------------------------------------------------------
@@ -152,8 +137,12 @@ def checkin(body: Checkin, dev=Depends(current_device)):
         values["batt_mv"] = body.batt_mv
     if body.rssi is not None:
         values["rssi"] = body.rssi
+    if body.board:
+        values["board"] = body.board
     if body.err:
         log.warning("Device %s (room %s) reports: %s", dev.id, dev.room, body.err)
+        values["last_error"] = body.err
+        values["last_error_at"] = now
 
     sleep = DEACTIVATED_SLEEP_SECONDS
     fw_path = None
@@ -171,6 +160,8 @@ def checkin(body: Checkin, dev=Depends(current_device)):
         if dev.desired_fw and body.fw == dev.desired_fw and (dev.ota_force or dev.ota_after):
             values["ota_force"] = False
             values["ota_after"] = None
+            values["last_error"] = None  # a successful update clears the old error
+            values["last_error_at"] = None
 
     with engine.begin() as conn:
         conn.execute(update(devices).where(devices.c.id == dev.id).values(**values))

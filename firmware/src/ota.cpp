@@ -12,6 +12,7 @@
 #include <mbedtls/version.h>
 
 #include "config.h"
+#include "net.h"
 
 // mbedTLS 3 renamed the SHA-256 functions.
 #if MBEDTLS_VERSION_MAJOR >= 3
@@ -137,13 +138,14 @@ bool otaInstall(const Settings &s, const String &version, const String &sha256, 
   }
   Serial.printf("OTA: installing %s (%u bytes)\n", version.c_str(), (unsigned)size);
 
-  // Only plain HTTP for now (see api.cpp). The SHA-256 from the server protects against
-  // transfer errors, not against an attacker. HTTPS and signed firmware come later.
-  WiFiClient client;
+  // Over https:// the connection is authenticated by the CA. The SHA-256 from the server
+  // protects against transfer errors. A signature of the firmware itself comes later.
+  WiFiClient *client = netClient(s);
+  if (!client) return failed(version, "https needs a ca");
   HTTPClient http;
   http.setTimeout(HTTP_TIMEOUT_MS);
   String url = s.server + "/api/firmware/" + BOARD_NAME + "/" + version;
-  if (!http.begin(client, url)) return failed(version, "bad url");
+  if (!http.begin(*client, url)) return failed(version, "bad url");
   http.addHeader("X-Device-Id", s.id);
   http.addHeader("X-Token", s.token);
 

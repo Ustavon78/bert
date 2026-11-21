@@ -1,9 +1,16 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+"""Neues Display anlegen:  python add_device.py RAUM ["NAME"]
+
+Beispiel:  python add_device.py 118 "Raum 118 Eingang"
+Gibt ID und Token einmalig aus. Das Token wird nur als Hash gespeichert.
+"""
+
 import hashlib
 import secrets
 import sys
 from datetime import datetime
 
-from sqlalchemy import insert, select
+from sqlalchemy import insert, select, update
 
 from db import devices, engine
 
@@ -23,6 +30,15 @@ def create_device(room: str, name: str | None = None) -> tuple[str, str]:
             mode="active", ota_force=False, created_at=datetime.now(),
         ))
     return device_id, token
+
+
+def rotate_token(device_id: str) -> str | None:
+    """Give a device a new token (the old one stops working). Returns the new token or None."""
+    token = secrets.token_urlsafe(32)
+    with engine.begin() as conn:
+        result = conn.execute(update(devices).where(devices.c.id == device_id).values(
+            token_hash=hashlib.sha256(token.encode()).hexdigest()))
+    return token if result.rowcount else None
 
 
 if __name__ == "__main__":

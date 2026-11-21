@@ -12,6 +12,7 @@
 #include "api.h"
 #include "config.h"
 #include "display.h"
+#include "net.h"
 #include "ota.h"
 #include "settings.h"
 
@@ -63,12 +64,14 @@ static void updateImage(const Settings &settings, uint8_t *imageBuffer) {
 }
 
 void setup() {
+  Serial.setRxBufferSize(2048);  // the console receives long lines (the CA certificate)
   Serial.begin(115200);
   delay(300);
   Serial.printf("\nBert firmware %s (%s)\n", FW_VERSION, BOARD_NAME);
 
   // Must come first: goes back to the previous firmware if a fresh update keeps crashing.
   otaBootCheck();
+  clockInit();  // TLS needs a plausible date, see net.cpp
 #ifdef OTA_TEST_CRASH
   Serial.println(F("TEST BUILD: crashing on purpose"));
   delay(200);

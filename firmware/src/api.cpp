@@ -6,6 +6,7 @@
 #include <WiFi.h>
 
 #include "config.h"
+#include "net.h"
 #include "ota.h"
 
 static void addAuthHeaders(HTTPClient &http, const Settings &s) {
@@ -16,11 +17,11 @@ static void addAuthHeaders(HTTPClient &http, const Settings &s) {
 CheckinResult checkin(const Settings &s, const String &currentHash) {
   CheckinResult result;
 
-  // Only plain HTTP for now. HTTPS (with the school CA certificate) comes later.
-  WiFiClient client;
+  WiFiClient *client = netClient(s);  // TLS if the server address starts with https://
+  if (!client) return result;
   HTTPClient http;
   http.setTimeout(HTTP_TIMEOUT_MS);
-  if (!http.begin(client, s.server + "/api/checkin")) {
+  if (!http.begin(*client, s.server + "/api/checkin")) {
     Serial.println(F("checkin: invalid server URL"));
     return result;
   }
@@ -68,10 +69,11 @@ CheckinResult checkin(const Settings &s, const String &currentHash) {
 }
 
 bool downloadImage(const Settings &s, uint8_t *buffer, size_t bufferSize, String &imageHash) {
-  WiFiClient client;
+  WiFiClient *client = netClient(s);
+  if (!client) return false;
   HTTPClient http;
   http.setTimeout(HTTP_TIMEOUT_MS);
-  if (!http.begin(client, s.server + "/api/image")) return false;
+  if (!http.begin(*client, s.server + "/api/image")) return false;
   addAuthHeaders(http, s);
   const char *wanted[] = {"X-Image-Hash"};
   http.collectHeaders(wanted, 1);

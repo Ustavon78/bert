@@ -10,6 +10,7 @@ struct Settings {
   String server;  // base URL without trailing slash, e.g. http://192.168.1.10:8000
   String id;      // device id
   String token;   // device token
+  String ca;      // CA certificate of the server (DER as base64, one line), needed for https://
 };
 
 void loadSettings(Settings &s);
