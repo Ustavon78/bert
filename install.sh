@@ -86,7 +86,22 @@ bold "Creating the configuration..."
 DB_PASSWORD="$(random_hex)"
 DB_ROOT_PASSWORD="$(random_hex)"
 PUBLIC_HOST="${SERVER_HOST:-$SERVER_IP}"
-mkdir -p certs backups
+# Create the folders that are mounted into the containers ourselves. If they are missing, Docker
+# creates them as root and the certificates could not be written.
+mkdir -p certs/ca certs/public certs/server backups
+
+# From here on a failed installation is removed again, so that ./install.sh can simply be run again.
+INSTALL_DONE=0
+cleanup_after_failure() {
+  if [ "$INSTALL_DONE" != 1 ]; then
+    echo
+    echo "The installation did not finish. Removing the partial installation..."
+    compose down -v --remove-orphans >/dev/null 2>&1 || true
+    rm -f .env .env.db
+    echo "You can run ./install.sh again."
+  fi
+}
+trap cleanup_after_failure EXIT
 
 umask 077   # the files below contain secrets: readable for the owner only
 cat > .env <<ENV
@@ -115,6 +130,8 @@ bold "Building the Docker image (the first time this takes several minutes)..."
 compose build api
 
 bold "Creating the local certificate..."
+[ -w certs/ca ] && [ -w certs/public ] && [ -w certs/server ] \
+  || fail "The folder certs/ is not writable for your user (probably created by Docker as root). Remove it with: sudo rm -rf certs   and run ./install.sh again."
 cert_args=(--out /certs-out --ip "$SERVER_IP")
 [ -n "$SERVER_HOST" ] && cert_args+=(--host "$SERVER_HOST")
 compose run --rm --no-deps -T --user "$(id -u):$(id -g)" -v "$PWD/certs:/certs-out" api \
@@ -139,7 +156,12 @@ for _ in $(seq 1 90); do
   sleep 2
 done
 echo
-[ "$ready" = 1 ] || fail "The server did not start. Look at the logs with:  docker compose logs"
+if [ "$ready" != 1 ]; then
+  INSTALL_DONE=1   # keep the containers and the logs for inspection
+  fail "The server did not start. Look at the logs with:  docker compose logs
+       To start over:  docker compose down -v && rm -f .env .env.db"
+fi
+INSTALL_DONE=1
 
 compose exec -T api python seed_schedule.py || true   # default wake-up schedule
 

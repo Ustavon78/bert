@@ -61,6 +61,7 @@ cmd_update() {
 
 cmd_certs() {
   [ "$#" -gt 0 ] || die "Usage: ./epaper certs --ip ADDRESS [--host NAME]   (add --new-ca to replace the CA)"
+  mkdir -p certs/ca certs/public certs/server   # as this user, not as root through Docker
   compose run --rm --no-deps -T --user "$(id -u):$(id -g)" -v "$PWD/certs:/certs-out" api \
     python make_certs.py --out /certs-out "$@"
   compose restart web
