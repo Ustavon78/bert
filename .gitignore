@@ -24,3 +24,4 @@ images/
 .env.db
 certs/
 backups/
+docker-compose.override.yml

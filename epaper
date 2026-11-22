@@ -117,6 +117,52 @@ cmd_firmware_add() {
   echo "Copied as ${2}_${3}.bin. Assign it to displays with:  ./epaper devices fw all $3"
 }
 
+cmd_db_access() {
+  case "${1:-status}" in
+    on)
+      cat > docker-compose.override.yml <<'YAML'
+# Created by './epaper db-access on'. Publishes the database on the loopback address of this
+# machine only. It is reachable through an SSH tunnel, but not from the network.
+services:
+  db:
+    ports:
+      - "127.0.0.1:3306:3306"
+YAML
+      compose up -d db
+      echo "Database access is ON (only on 127.0.0.1 of this machine)."
+      echo "Connect from your PC through an SSH tunnel, see './epaper db-info'."
+      ;;
+    off)
+      rm -f docker-compose.override.yml
+      compose up -d db
+      echo "Database access is OFF."
+      ;;
+    status)
+      if [ -f docker-compose.override.yml ]; then echo "Database access: ON (127.0.0.1:3306, through an SSH tunnel)"; else echo "Database access: OFF"; fi
+      ;;
+    *) die "Usage: ./epaper db-access on|off|status" ;;
+  esac
+}
+
+cmd_db_info() {
+  cat <<INFO
+Connection settings for a database tool (DataGrip, DBeaver ...) through an SSH tunnel.
+First switch the access on:  ./epaper db-access on
+
+  Database (MariaDB):  Host 127.0.0.1   Port 3306
+                       User epaper      Database epaper
+                       Password $(env_value DB_PASSWORD)
+  SSH tunnel:          Host $(hostname -I | awk '{print $1}')   Port 22   User $(id -un)
+                       Authentication: key pair (recommended)
+
+Do not change tables by hand: schema changes go through the migrations (python init_db.py).
+INFO
+}
+
+cmd_db_shell() {
+  compose exec db sh -c 'MYSQL_PWD="$MARIADB_ROOT_PASSWORD" exec mariadb -u root epaper'
+}
+
 cmd_help() {
   cat <<'HELP'
 Bert management
@@ -136,6 +182,9 @@ Bert management
   ./epaper teachers-import FILE.csv    import teacher names (abbreviation;name)
 
   ./epaper admin-password              create a new admin password
+  ./epaper db-access on|off|status     database access through an SSH tunnel (for DataGrip etc.)
+  ./epaper db-info                     connection settings for such a tool
+  ./epaper db-shell                    SQL shell on this machine
   ./epaper certs --ip ADDRESS [--host NAME]       create the server certificate again
   ./epaper shell                       shell inside the API container
 HELP
@@ -162,6 +211,9 @@ case "${1:-help}" in
   firmware-add) shift; cmd_firmware_add "$@" ;;
   teachers-import) shift; cmd_teachers_import "$@" ;;
   admin-password) cmd_admin_password ;;
+  db-access)  shift; cmd_db_access "$@" ;;
+  db-info)    cmd_db_info ;;
+  db-shell)   cmd_db_shell ;;
   certs)      shift; cmd_certs "$@" ;;
   shell)      compose exec api sh ;;
   help|-h|--help) cmd_help ;;
