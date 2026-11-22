@@ -90,7 +90,7 @@ cmd_add_device() {
   [ -n "$id" ] && [ -n "$token" ] || die "Could not create the device: $output"
   url="$(env_value PUBLIC_URL)"
   echo "Device created. Type these lines into the serial console of the display"
-  echo "(open the serial monitor, press reset, and type within 3 seconds):"
+  echo "(open the serial monitor, press reset, and start typing within 10 seconds):"
   echo
   echo "  set ssid <WiFi name>"
   echo "  set pass <WiFi password>"

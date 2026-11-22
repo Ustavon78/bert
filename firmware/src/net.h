@@ -15,3 +15,7 @@ void clockInit();
 // https://, a plain client for http://. Returns nullptr if https:// is configured without a CA
 // (without a CA the connection would not be verified, that is never allowed).
 WiFiClient *netClient(const Settings &s);
+
+// First 8 hex characters of the SHA-256 of a text. Used to compare the stored CA with the
+// file ca.b64 on the server:  sha256sum certs/public/ca.b64 | cut -c1-8
+String sha256Prefix(const String &text);

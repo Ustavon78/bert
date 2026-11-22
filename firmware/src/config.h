@@ -5,7 +5,7 @@
 #pragma once
 
 #ifndef FW_VERSION
-#define FW_VERSION "0.4.0"
+#define FW_VERSION "0.4.2"
 #endif
 
 // Timing
@@ -14,7 +14,7 @@
 #define RETRY_SLEEP_SECONDS 900       // sleep time after an error (WiFi/server problem)
 #define MIN_SLEEP_SECONDS 10          // raise for production: protects the battery if the server sends 0
 #define MAX_SLEEP_SECONDS 604800      // 7 days
-#define SERIAL_SETUP_WINDOW_MS 3000   // console window after power-on (not after timer wake-ups)
+#define SERIAL_SETUP_WINDOW_MS 10000  // console window after power-on (not after timer wake-ups)
 #define SERIAL_LINE_MAX 1500          // longest console line (the CA certificate is about 550 characters)
 
 // ---------------------------------------------------------------------------

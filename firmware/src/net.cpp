@@ -2,8 +2,21 @@
 #include "net.h"
 
 #include <WiFiClientSecure.h>
+#include <mbedtls/sha256.h>
+#include <mbedtls/version.h>
 #include <sys/time.h>
 #include <time.h>
+
+// mbedTLS 3 renamed the SHA-256 functions.
+#if MBEDTLS_VERSION_MAJOR >= 3
+#define SHA256_START(ctx) mbedtls_sha256_starts(ctx, 0)
+#define SHA256_UPDATE(ctx, data, length) mbedtls_sha256_update(ctx, data, length)
+#define SHA256_FINISH(ctx, out) mbedtls_sha256_finish(ctx, out)
+#else
+#define SHA256_START(ctx) mbedtls_sha256_starts_ret(ctx, 0)
+#define SHA256_UPDATE(ctx, data, length) mbedtls_sha256_update_ret(ctx, data, length)
+#define SHA256_FINISH(ctx, out) mbedtls_sha256_finish_ret(ctx, out)
+#endif
 
 static WiFiClientSecure secureClient;
 static WiFiClient plainClient;
@@ -57,4 +70,17 @@ WiFiClient *netClient(const Settings &s) {
   if (caPem.length() == 0) caPem = toPem(s.ca);
   secureClient.setCACert(caPem.c_str());  // the server certificate must be signed by this CA
   return &secureClient;
+}
+
+String sha256Prefix(const String &text) {
+  mbedtls_sha256_context context;
+  mbedtls_sha256_init(&context);
+  SHA256_START(&context);
+  SHA256_UPDATE(&context, (const unsigned char *)text.c_str(), text.length());
+  unsigned char digest[32];
+  SHA256_FINISH(&context, digest);
+  mbedtls_sha256_free(&context);
+  char out[9];
+  snprintf(out, sizeof(out), "%02x%02x%02x%02x", digest[0], digest[1], digest[2], digest[3]);
+  return String(out);
 }

@@ -5,6 +5,7 @@
 
 #include "config.h"
 #include "display.h"
+#include "net.h"
 
 static Preferences prefs;
 // Always opened read/write: this creates the namespace on first use. A read-only open
@@ -70,7 +71,7 @@ static void showSettings() {
   Serial.printf("pass:   %s\n", s.pass.length() ? "(set)" : "(empty)");
   Serial.printf("server: %s%s\n", s.server.c_str(), s.server.startsWith("http://") ? "  (NOT encrypted!)" : "");
   Serial.printf("ca:     %s", s.ca.length() ? "(set, " : "(empty)\n");
-  if (s.ca.length()) Serial.printf("%u characters)\n", (unsigned)s.ca.length());
+  if (s.ca.length()) Serial.printf("%u characters, sha256 %s)\n", (unsigned)s.ca.length(), sha256Prefix(s.ca).c_str());
   Serial.printf("id:     %s\n", s.id.c_str());
   Serial.printf("token:  %s\n", s.token.length() ? "(set)" : "(empty)");
   Serial.printf("hash:   %s\n", loadHash().c_str());

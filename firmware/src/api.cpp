@@ -41,6 +41,8 @@ CheckinResult checkin(const Settings &s, const String &currentHash) {
   result.httpCode = http.POST(payload);
   if (result.httpCode != 200) {
     Serial.printf("checkin: HTTP %d\n", result.httpCode);
+    if (result.httpCode < 0 && s.server.startsWith("https://"))
+      Serial.println(F("hint: the stored CA must be the one of this server and the server address must be in its certificate (see 'show')"));
     http.end();
     return result;
   }

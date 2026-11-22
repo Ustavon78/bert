@@ -85,12 +85,19 @@ def load_ca(out: Path) -> tuple[ec.EllipticCurvePrivateKey, x509.Certificate]:
     return key, certificate
 
 
-def create_server_certificate(out: Path, ca_key, ca_certificate, hosts: list[str], ips: list[str]) -> None:
+def create_server_certificate(out: Path, ca_key, ca_certificate, hosts: list[str], ips: list[str],
+                              common_name: str) -> None:
     key = ec.generate_private_key(ec.SECP256R1())
-    names: list[x509.GeneralName] = [x509.DNSName(h) for h in hosts] + [x509.IPAddress(ipaddress.ip_address(i)) for i in ips]
+    # Every IP address is listed twice: as an IP address (what browsers and OpenSSL check) and as a
+    # DNS name with the same text. The displays use mbedTLS 2.x, which does not look at IP address
+    # entries at all and compares the address as text with the DNS names.
+    names: list[x509.GeneralName] = (
+            [x509.DNSName(h) for h in hosts + ips]
+            + [x509.IPAddress(ipaddress.ip_address(i)) for i in ips]
+    )
     certificate = (
         x509.CertificateBuilder()
-        .subject_name(name((hosts + ips)[0])).issuer_name(ca_certificate.subject)
+        .subject_name(name(common_name)).issuer_name(ca_certificate.subject)
         .public_key(key.public_key()).serial_number(x509.random_serial_number())
         .not_valid_before(NOT_BEFORE).not_valid_after(SERVER_NOT_AFTER)
         .add_extension(x509.SubjectAlternativeName(names), critical=False)
@@ -130,7 +137,7 @@ def main() -> None:
     # localhost is always included, so that the server can be checked on the machine itself.
     hosts = list(dict.fromkeys(args.host + ["localhost"]))  # without duplicates
     ips = list(dict.fromkeys(args.ip + ["127.0.0.1"]))
-    create_server_certificate(out, ca_key, ca_certificate, hosts, ips)
+    create_server_certificate(out, ca_key, ca_certificate, hosts, ips, (args.host + args.ip)[0])
     fingerprint = ca_certificate.fingerprint(hashes.SHA256()).hex(":")
     print(f"Server certificate created for: {', '.join(hosts + ips)}")
     print(f"CA fingerprint (SHA-256): {fingerprint}")
